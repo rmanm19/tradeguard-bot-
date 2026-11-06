@@ -1,0 +1,73 @@
+//@version=5
+indicator("TradeGuard — Prop Lot & Liquidity Magnet Radar", shorttitle="TG SmartRadar", overlay=true, max_lines_count=50, max_labels_count=50)
+
+// ============================================================================
+// ۱) تنظیمات حساب پراپ تریدر (برای جدول محاسبه لحظه‌ای حجم امن روی چارت)
+// ============================================================================
+grpProp       = "🛡️ تنظیمات گارد پراپ (TradeGuard)"
+propBalance   = input.float(10000.0, "سایز حساب پراپ ($)", minval=500, step=500, group=grpProp)
+dailyLimitPct = input.float(5.0,     "سقف دراودان روزانه پراپ (%)", minval=1.0, maxval=15.0, step=0.5, group=grpProp)
+guardCutPct   = input.float(3.8,     "خط قرمز قفل تریدگارد (%)", minval=0.5, maxval=12.0, step=0.1, group=grpProp)
+riskPct       = input.float(0.5,     "ریسک هر معامله (%)", minval=0.1, maxval=3.0, step=0.1, group=grpProp)
+slPips        = input.float(30.0,    "حد ضرر پیش‌فرض (پیپ)", minval=5.0, maxval=500.0, step=5.0, group=grpProp)
+
+grpLiq        = "🧲 آهنربای نقدینگی و کیل‌زون‌ها"
+showPDHL      = input.bool(true,  "نمایش سقف و کف نقدینگی روز قبل (PDH / PDL)", group=grpLiq)
+showSessions  = input.bool(true,  "هایلایت سشن لندن و نیویورک (Killzones)", group=grpLiq)
+sweepAlerts   = input.bool(true,  "علامت‌گذاری شکار استاپ (Liquidity Sweep)", group=grpLiq)
+
+// ============================================================================
+// ۲) استخراج سقف و کف روز قبل (مناطق تجمع استاپ و لیکوییدیتی)
+// ============================================================================
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+plot(showPDHL ? pdh : na, "نقدینگی بالای سقف دیروز (PDH)", color=color.new(#FF5C77, 20), linewidth=2, style=plot.style_linebr)
+plot(showPDHL ? pdl : na, "نقدینگی زیر کف دیروز (PDL)",  color=color.new(#25D69A, 20), linewidth=2, style=plot.style_linebr)
+
+// تشخیص Liquidity Sweep (زدن استاپ‌های سقف/کف دیروز و بازگشت به داخل رنج)
+bearSweep = sweepAlerts and high > pdh and close < pdh and barstate.isconfirmed
+bullSweep = sweepAlerts and low  < pdl and close > pdl and barstate.isconfirmed
+
+plotshape(bearSweep, title="Bearish Liquidity Sweep", style=shape.labeldown, location=location.abovebar, color=color.new(#FF5C77, 0), text="SWEEP ↓", textcolor=color.white, size=size.tiny)
+plotshape(bullSweep, title="Bullish Liquidity Sweep", style=shape.labelup,   location=location.belowbar, color=color.new(#25D69A, 0), text="SWEEP ↑", textcolor=color.black, size=size.tiny)
+
+// ============================================================================
+// ۳) کیل‌زون‌های طلایی لندن و نیویورک (به وقت UTC)
+// ============================================================================
+inLondon = not na(time(timeframe.period, "0700-1000", "UTC"))
+inNY     = not na(time(timeframe.period, "1230-1530", "UTC"))
+
+bgcolor(showSessions and inLondon ? color.new(#2AABEE, 92) : na, title="کیل‌زون لندن")
+bgcolor(showSessions and inNY     ? color.new(#FFC94D, 92) : na, title="کیل‌زون نیویورک")
+
+// ============================================================================
+// ۴) پنل زنده محاسبه حجم امن و سقف ضرر روزانه روی چارت تریدینگ‌ویو
+// ============================================================================
+var table hud = table.new(position.top_right, 2, 6, bgcolor=color.new(#0B1220, 10), border_color=color.new(#1E2C45, 0), border_width=1)
+
+riskUsd    = propBalance * (riskPct / 100.0)
+guardUsd   = propBalance * (guardCutPct / 100.0)
+safeLot    = riskUsd / math.max(1.0, slPips * 10.0)
+maxTrades  = math.floor(guardUsd / math.max(1.0, riskUsd))
+dailyGoal  = propBalance * 0.001 // فرمول طلایی روزی ۰.۱٪ (۱۰ دلار روی حساب ۱۰کا)
+
+if barstate.islast
+    table.cell(hud, 0, 0, "🛡️ TradeGuard Pro", text_color=color.white, bgcolor=color.new(#2AABEE, 30), text_size=size.small)
+    table.cell(hud, 1, 0, syminfo.ticker,      text_color=#FFC94D,     bgcolor=color.new(#2AABEE, 30), text_size=size.small)
+
+    table.cell(hud, 0, 1, "Guard Daily Cap",   text_color=#8FA2C0, text_size=size.tiny)
+    table.cell(hud, 1, 1, "$" + str.tostring(guardUsd, "#.##") + " (" + str.tostring(guardCutPct, "#.#") + "%)", text_color=#FF5C77, text_size=size.small)
+
+    table.cell(hud, 0, 2, "Risk / Trade",      text_color=#8FA2C0, text_size=size.tiny)
+    table.cell(hud, 1, 2, "$" + str.tostring(riskUsd, "#.##") + " (" + str.tostring(riskPct, "#.#") + "%)", text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 3, "Safe Lot (" + str.tostring(slPips, "#") + "p)", text_color=#8FA2C0, text_size=size.tiny)
+    table.cell(hud, 1, 3, str.tostring(safeLot, "#.##") + " Lot", text_color=#25D69A, text_size=size.small)
+
+    table.cell(hud, 0, 4, "Max Losses Today",  text_color=#8FA2C0, text_size=size.tiny)
+    table.cell(hud, 1, 4, str.tostring(maxTrades) + " Trades", text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 5, "0.1% Calm Target",  text_color=#8FA2C0, text_size=size.tiny)
+    table.cell(hud, 1, 5, "+$" + str.tostring(dailyGoal, "#.##") + " / day", text_color=#FFC94D, text_size=size.small)
+
+alertcondition(bearSweep or bullSweep, title="TradeGuard Liquidity Sweep!", message="🧲 شکار نقدینگی (PDH/PDL Sweep) روی {{ticker}} تایید شد!")

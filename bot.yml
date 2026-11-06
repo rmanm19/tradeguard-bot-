@@ -1,0 +1,93 @@
+# ─────────────────────────────────────────────────────────────
+#  TradeGuard Bot — اجرای ۲۴/۷ روی GitHub Actions (رایگان)
+#  هر اجرا ۵ ساعت و ۵۰ دقیقه؛ اجرای بعدی بلافاصله شروع می‌شود.
+# ─────────────────────────────────────────────────────────────
+name: TradeGuard Bot
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# فقط یک ربات در لحظه — و همیشه یکی در نوبت که بلافاصله بعدی را شروع کند
+concurrency:
+  group: tradeguard-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358          # سقف خود GitHub = ۳۶۰ دقیقه
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 1) دیتابیس رمزنگاری‌شده را از اجرای قبلی برگردان
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: tradeguard-pro/tradeguard.db.enc
+          key: tgdb-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            tgdb-
+
+      - name: Decrypt database
+        env:
+          TG_DB_KEY: ${{ secrets.TG_DB_KEY }}
+        run: |
+          cd tradeguard-pro
+          if [ -f tradeguard.db.enc ]; then
+            echo "🔓 رمزگشایی دیتابیس قبلی…"
+            python db_crypt.py decrypt tradeguard.db.enc tradeguard.db \
+              || echo "::warning::رمزگشایی ناموفق بود — با دیتابیس خالی شروع می‌شود"
+          else
+            echo "ℹ️ دیتابیس قبلی نبود — از صفر ساخته می‌شود"
+          fi
+
+      - name: Write .env
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_USER_ID: ${{ secrets.ADMIN_USER_ID }}
+          MINI_APP_URL: ${{ secrets.MINI_APP_URL }}
+          PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}
+          SUBSCRIPTION_STARS: ${{ secrets.SUBSCRIPTION_STARS }}
+        run: |
+          cd tradeguard-pro
+          touch .env
+          echo "BOT_TOKEN=${BOT_TOKEN}"                 >> .env
+          echo "ADMIN_USER_ID=${ADMIN_USER_ID}"         >> .env
+          echo "MINI_APP_URL=${MINI_APP_URL:-https://example.com}" >> .env
+          echo "PUBLIC_CHANNEL_ID=${PUBLIC_CHANNEL_ID}" >> .env
+          echo "SUBSCRIPTION_STARS=${SUBSCRIPTION_STARS:-300}"     >> .env
+          echo "✅ .env نوشته شد ($(wc -l < .env) خط)"
+
+      # 2) ربات را ۵ ساعت و ۵۰ دقیقه زنده نگه دار
+      - name: Run bot
+        run: python tradeguard-pro/run_forever.py --max-seconds 21000
+
+      # 3) دیتابیس را رمزنگاری و کش کن (همیشه، حتی اگر اجرا خطا داد)
+      - name: Encrypt database
+        if: always()
+        continue-on-error: true
+        env:
+          TG_DB_KEY: ${{ secrets.TG_DB_KEY }}
+        run: |
+          cd tradeguard-pro
+          if [ -f tradeguard.db ]; then
+            python db_crypt.py encrypt tradeguard.db tradeguard.db.enc
+            echo "🔐 دیتابیس رمزنگاری شد ($(stat -c%s tradeguard.db.enc) bytes)"
+          fi
+
+      - name: Save database
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: tradeguard-pro/tradeguard.db.enc
+          key: tgdb-${{ github.run_id }}-${{ github.run_attempt }}
